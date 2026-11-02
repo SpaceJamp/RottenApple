@@ -109,7 +109,7 @@ dotnet test
 - `tests/RottenApple.Tests`: xUnit tests for `Core`
 - `install.sh`: installer for Arch and Fedora
 
- [!IMPORTANT]
+[!IMPORTANT]
 ## AI usage disclosure
 
 This project was written with the help of an AI assistant: Claude (Anthropic), working
