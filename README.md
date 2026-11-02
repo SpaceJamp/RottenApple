@@ -19,6 +19,10 @@ affiliated with or endorsed by Apple Inc.
 - Pair (trust) a device
 - Full backup to a folder you choose
 - Restore a backup, including onto a different device
+- Encrypted backups: turn backup encryption on or off, change its password, and restore
+  encrypted backups (you are asked for the password only when the backup needs it).
+  Passwords go to `idevicebackup2` through environment variables, so they never show up
+  in `ps` output or in the logs
 - Update to the latest signed iOS, keeping data
 - Erase & reinstall the latest signed iOS (you must type `ERASE` to confirm)
 - Update or erase a device that is stuck in recovery or DFU mode: leave no device selected
@@ -87,7 +91,6 @@ Plug in the device, unlock it, click **Pair**, and tap **Trust** on the device.
 
 ## Limits
 
-- Encrypted backups are not supported yet.
 - Turn off Find My before restoring a backup.
 - Update iOS and Erase need an `idevicerestore` version that supports `-y`.
 - RottenApple does not fix bugs inside idevicerestore itself. Restore failures on specific

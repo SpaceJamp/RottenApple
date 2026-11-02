@@ -6,14 +6,59 @@ namespace RottenApple;
 /// <summary>Avalonia has no built-in message box, so these build small modal windows.</summary>
 static class Dialogs
 {
-    public static async Task<bool> Confirm(Window owner, string title, string message, string yes = "Continue")
+    public static async Task<bool> Confirm(Window owner, string title, string message, string yes = "Continue") =>
+        await Choose(owner, title, message, yes) == 0;
+
+    /// <summary>Index of the option the user clicked, or -1 for Cancel. The last option is the default.</summary>
+    public static async Task<int> Choose(Window owner, string title, string message, params string[] options)
     {
-        var confirmed = false;
+        var chosen = -1;
         var (dialog, buttons) = Make(title, message, null);
         AddButton(dialog, buttons, "Cancel", isCancel: true, () => { });
-        AddButton(dialog, buttons, yes, isCancel: false, () => confirmed = true);
+        for (var i = 0; i < options.Length; i++)
+        {
+            var index = i;
+            AddButton(dialog, buttons, options[i], isCancel: false, () => chosen = index, isDefault: i == options.Length - 1);
+        }
         await dialog.ShowDialog(owner);
-        return confirmed;
+        return chosen;
+    }
+
+    /// <summary>A non-empty password, or null if the user cancelled. confirm asks twice and checks both match.</summary>
+    public static async Task<string?> AskPassword(Window owner, string title, string message, bool confirm)
+    {
+        string? answer = null;
+        var first = new TextBox { PasswordChar = '•' };
+        var second = new TextBox { PasswordChar = '•' };
+        var error = new TextBlock { Foreground = Avalonia.Media.Brushes.IndianRed, IsVisible = false };
+        var fields = new StackPanel { Spacing = 8 };
+        fields.Children.Add(first);
+        if (confirm)
+        {
+            fields.Children.Add(new TextBlock { Text = "Type it again:" });
+            fields.Children.Add(second);
+        }
+        fields.Children.Add(error);
+        var (dialog, buttons) = Make(title, message, fields);
+        AddButton(dialog, buttons, "Cancel", isCancel: true, () => { });
+        var ok = new Button { Content = "OK", IsDefault = true };
+        ok.Click += (_, _) =>
+        {
+            var problem = string.IsNullOrEmpty(first.Text) ? "Enter a password."
+                : confirm && first.Text != second.Text ? "The passwords do not match." : null;
+            if (problem is not null)
+            {
+                error.Text = problem;
+                error.IsVisible = true;
+                return;
+            }
+            answer = first.Text;
+            dialog.Close();
+        };
+        buttons.Children.Add(ok);
+        dialog.Opened += (_, _) => first.Focus();
+        await dialog.ShowDialog(owner);
+        return answer;
     }
 
     public static async Task Info(Window owner, string title, string message)
@@ -51,9 +96,9 @@ static class Dialogs
         return (dialog, buttons);
     }
 
-    static void AddButton(Window dialog, StackPanel buttons, string text, bool isCancel, Action onClick)
+    static void AddButton(Window dialog, StackPanel buttons, string text, bool isCancel, Action onClick, bool isDefault = true)
     {
-        var button = new Button { Content = text, IsCancel = isCancel, IsDefault = !isCancel };
+        var button = new Button { Content = text, IsCancel = isCancel, IsDefault = !isCancel && isDefault };
         button.Click += (_, _) => { onClick(); dialog.Close(); };
         buttons.Children.Add(button);
     }

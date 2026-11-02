@@ -17,6 +17,21 @@ public class CoreTests
         Assert.Equal([new Core.Device("abc123", "Jo's iPhone  iOS ?  [abc123]")], devices);
     }
 
+    [Theory]
+    [InlineData("true", "Jo's iPhone", true)]
+    [InlineData("false", "Jo's iPhone", false)]
+    [InlineData("", "Jo's iPhone", false)]  // key missing until encryption is first enabled
+    [InlineData("", "", null)]              // device locked or not paired
+    public void WillEncrypt_ReadsLockdownKey(string willEncrypt, string deviceName, bool? expected)
+    {
+        var replies = new Dictionary<string, string>
+        {
+            ["ideviceinfo -u abc -q com.apple.mobile.backup -k WillEncrypt"] = willEncrypt,
+            ["ideviceinfo -u abc -k DeviceName"] = deviceName,
+        };
+        Assert.Equal(expected, Core.WillEncrypt("abc", cmd => replies.GetValueOrDefault(string.Join(" ", cmd), "")));
+    }
+
     [Fact]
     public void IsBackupDir_NeedsInfoAndManifest()
     {

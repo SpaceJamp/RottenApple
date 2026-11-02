@@ -32,7 +32,7 @@ public partial class MainWindow : Window
     void SetBusy(bool value)
     {
         busy = value;
-        foreach (var button in new[] { RefreshButton, PairButton, BackupButton, RestoreButton, UpdateButton, EraseButton })
+        foreach (var button in new[] { RefreshButton, PairButton, BackupButton, RestoreButton, EncryptionButton, UpdateButton, EraseButton })
             button.IsEnabled = !value;
     }
 
@@ -71,15 +71,20 @@ public partial class MainWindow : Window
         return picked.Count > 0 ? picked[0].TryGetLocalPath() : null;
     }
 
-    /// <summary>Stream a long command into the log pane and a per-job log file.</summary>
-    async Task RunJob(string action, params string[] cmd)
+    /// <summary>
+    /// Stream a long command into the log pane and a per-job log file; returns the output, minus progress bars.
+    /// env carries secrets such as backup passwords: unlike arguments, other users cannot read them via ps,
+    /// and they are never logged.
+    /// </summary>
+    async Task<string> RunJob(string action, string[] cmd, Dictionary<string, string>? env = null)
     {
         SetBusy(true);
         SetProgress("", 0);
         Write($"\n$ {string.Join(" ", cmd)}\n");
+        var output = "";
         try
         {
-            await Task.Run(() => Execute(action, cmd));
+            output = await Task.Run(() => Execute(action, cmd, env));
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -87,11 +92,13 @@ public partial class MainWindow : Window
         }
         SetBusy(false);
         await Refresh();
+        return output;
     }
 
     // Runs on a worker thread; all UI changes go through Post.
-    void Execute(string action, string[] cmd)
+    string Execute(string action, string[] cmd, Dictionary<string, string>? env)
     {
+        var output = new System.Text.StringBuilder();
         Directory.CreateDirectory(Core.LogDir);
         var path = Path.Combine(Core.LogDir, $"{action}-{DateTime.Now:yyyyMMdd-HHmmss}.log");
         Post(() => Write($"Log file: {path}\n"));
@@ -124,6 +131,7 @@ public partial class MainWindow : Window
                     return;
                 }
                 if (string.IsNullOrWhiteSpace(line)) return;
+                output.AppendLine(line);
                 Post(() => Write(line + "\n"));
                 Record(line);
                 if (Core.HintFor(line) is { } hint && shown.Add(hint))
@@ -143,6 +151,7 @@ public partial class MainWindow : Window
                 RedirectStandardOutput = true, RedirectStandardError = true, RedirectStandardInput = true,
             };
             foreach (var arg in cmd.Skip(1)) psi.ArgumentList.Add(arg);
+            foreach (var (key, value) in env ?? []) psi.Environment[key] = value;
             using var proc = Process.Start(psi)!;
             proc.StandardInput.Close();  // tools must never wait on a prompt; dialogs did the confirming
             proc.OutputDataReceived += (_, e) => Handle(e.Data);
@@ -158,6 +167,7 @@ public partial class MainWindow : Window
         }
         Record(result);
         Post(() => Write(result + "\n"));
+        return output.ToString();
     }
 
     async void OnRefresh(object? sender, RoutedEventArgs e) => await Refresh();
@@ -165,14 +175,51 @@ public partial class MainWindow : Window
     async void OnPair(object? sender, RoutedEventArgs e)
     {
         if (await Udid() is { } udid)
-            await RunJob("pair", "idevicepair", "-u", udid, "pair");
+            await RunJob("pair", ["idevicepair", "-u", udid, "pair"]);
     }
 
     async void OnBackup(object? sender, RoutedEventArgs e)
     {
         if (await Udid() is not { } udid) return;
+        // an encrypted backup needs no password here: the device encrypts with the one it already has
         if (await PickFolder("Folder to store backups in") is { } folder)
-            await RunJob("backup", "idevicebackup2", "-u", udid, "backup", "--full", folder);
+            await RunJob("backup", ["idevicebackup2", "-u", udid, "backup", "--full", folder]);
+    }
+
+    async void OnEncryption(object? sender, RoutedEventArgs e)
+    {
+        if (await Udid() is not { } udid) return;
+        var encrypted = await Task.Run(() => Core.WillEncrypt(udid));
+        if (encrypted is null)
+        {
+            await Dialogs.Info(this, "Backup encryption", "Cannot read the encryption setting. Unlock the device and click Pair first.");
+            return;
+        }
+        if (encrypted == false)
+        {
+            if (await Dialogs.AskPassword(this, "Turn on backup encryption",
+                    "Encrypted backups also include saved passwords, Wi-Fi settings and Health data.\n\n" +
+                    "Keep this password safe: without it these backups cannot be restored. " +
+                    "The device may ask for its passcode to confirm.\n\nNew backup password:", confirm: true) is { } password)
+                await RunJob("encryption-on", ["idevicebackup2", "-u", udid, "encryption", "on"],
+                             new() { ["BACKUP_PASSWORD_NEW"] = password, ["BACKUP_PASSWORD"] = password });
+            return;
+        }
+        switch (await Dialogs.Choose(this, "Backup encryption", "Backup encryption is on for this device.",
+                                     "Turn off", "Change password"))
+        {
+            case 0:
+                if (await Dialogs.AskPassword(this, "Turn off backup encryption", "Current backup password:", confirm: false) is { } current)
+                    await RunJob("encryption-off", ["idevicebackup2", "-u", udid, "encryption", "off"],
+                                 new() { ["BACKUP_PASSWORD"] = current });
+                break;
+            case 1:
+                if (await Dialogs.AskPassword(this, "Change backup password", "Current backup password:", confirm: false) is { } old
+                    && await Dialogs.AskPassword(this, "Change backup password", "New backup password:", confirm: true) is { } next)
+                    await RunJob("encryption-changepw", ["idevicebackup2", "-u", udid, "changepw"],
+                                 new() { ["BACKUP_PASSWORD"] = old, ["BACKUP_PASSWORD_NEW"] = next });
+                break;
+        }
     }
 
     async void OnRestore(object? sender, RoutedEventArgs e)
@@ -190,8 +237,12 @@ public partial class MainWindow : Window
                                   "Turn off Find My first. Do not unplug until it finishes."))
         {
             // -s lets a backup from one device restore onto another
-            await RunJob("restore", "idevicebackup2", "-u", udid, "-s", Path.GetFileName(folder),
-                         "restore", "--system", "--settings", "--reboot", Path.GetDirectoryName(folder)!);
+            string[] cmd = ["idevicebackup2", "-u", udid, "-s", Path.GetFileName(folder),
+                            "restore", "--system", "--settings", "--reboot", Path.GetDirectoryName(folder)!];
+            // idevicebackup2 itself reads Manifest.plist and stops before touching the device if a password is needed
+            if ((await RunJob("restore", cmd)).Contains(Core.NeedsBackupPassword)
+                && await Dialogs.AskPassword(this, "Encrypted backup", "This backup is encrypted.\n\nBackup password:", confirm: false) is { } password)
+                await RunJob("restore", cmd, new() { ["BACKUP_PASSWORD"] = password });
         }
     }
 

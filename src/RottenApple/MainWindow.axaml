@@ -12,6 +12,7 @@
       <Button x:Name="PairButton" Content="Pair" Margin="0,0,8,4" Click="OnPair" />
       <Button x:Name="BackupButton" Content="Back up" Margin="0,0,8,4" Click="OnBackup" />
       <Button x:Name="RestoreButton" Content="Restore backup" Margin="0,0,8,4" Click="OnRestore" />
+      <Button x:Name="EncryptionButton" Content="Backup encryption" Margin="0,0,8,4" Click="OnEncryption" />
       <Button x:Name="UpdateButton" Content="Update iOS" Margin="0,0,8,4" Click="OnUpdate" />
       <Button x:Name="EraseButton" Content="Erase &amp; reinstall" Margin="0,0,8,4" Click="OnErase" />
     </WrapPanel>

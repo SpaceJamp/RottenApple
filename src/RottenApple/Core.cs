@@ -92,6 +92,22 @@ static partial class Core
         return devices;
     }
 
+    /// <summary>Whether the device encrypts its backups; null if the device cannot be read (locked or not paired).</summary>
+    public static bool? WillEncrypt(string udid, Func<string[], string>? run = null)
+    {
+        run ??= RunQuiet;
+        return run(["ideviceinfo", "-u", udid, "-q", "com.apple.mobile.backup", "-k", "WillEncrypt"]) switch
+        {
+            "true" => true,
+            "false" => false,
+            // the key is missing until encryption is first turned on; idevicebackup2 treats that as off too
+            _ => run(["ideviceinfo", "-u", udid, "-k", "DeviceName"]).Length > 0 ? false : null,
+        };
+    }
+
+    /// <summary>idevicebackup2 prints this when a restore needs the backup password.</summary>
+    public const string NeedsBackupPassword = "a backup password is required to restore an encrypted backup";
+
     /// <summary>idevicebackup2 writes one folder per device UDID holding Info.plist and Manifest.plist.</summary>
     public static bool IsBackupDir(string path) =>
         File.Exists(Path.Combine(path, "Info.plist")) && File.Exists(Path.Combine(path, "Manifest.plist"));
