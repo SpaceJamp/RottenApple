@@ -1,0 +1,27 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="RottenApple.MainWindow"
+        Title="RottenApple" Width="880" Height="580" MinWidth="560" MinHeight="380">
+  <DockPanel Margin="12">
+    <Grid DockPanel.Dock="Top" ColumnDefinitions="*,Auto" Margin="0,0,0,8">
+      <ComboBox x:Name="DeviceBox" HorizontalAlignment="Stretch" PlaceholderText="Looking for devices..." />
+      <Button Grid.Column="1" x:Name="RefreshButton" Content="Refresh" Margin="8,0,0,0" Click="OnRefresh" />
+    </Grid>
+
+    <WrapPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+      <Button x:Name="PairButton" Content="Pair" Margin="0,0,8,4" Click="OnPair" />
+      <Button x:Name="BackupButton" Content="Back up" Margin="0,0,8,4" Click="OnBackup" />
+      <Button x:Name="RestoreButton" Content="Restore backup" Margin="0,0,8,4" Click="OnRestore" />
+      <Button x:Name="UpdateButton" Content="Update iOS" Margin="0,0,8,4" Click="OnUpdate" />
+      <Button x:Name="EraseButton" Content="Erase &amp; reinstall" Margin="0,0,8,4" Click="OnErase" />
+    </WrapPanel>
+
+    <StackPanel DockPanel.Dock="Top" Margin="0,0,0,8">
+      <ProgressBar x:Name="Progress" Minimum="0" Maximum="100" Height="8" />
+      <TextBlock x:Name="Stage" Margin="0,4,0,0" />
+    </StackPanel>
+
+    <TextBox x:Name="LogBox" IsReadOnly="True" AcceptsReturn="True" TextWrapping="Wrap"
+             FontFamily="monospace" VerticalContentAlignment="Top" />
+  </DockPanel>
+</Window>

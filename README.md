@@ -2,7 +2,8 @@
 
 A small GUI for backing up, restoring and updating iPhones and iPads on Linux.
 It is a front end for [libimobiledevice](https://libimobiledevice.org/) and
-[idevicerestore](https://github.com/libimobiledevice/idevicerestore).
+[idevicerestore](https://github.com/libimobiledevice/idevicerestore), built with
+[Avalonia](https://avaloniaui.net/) on .NET 10.
 
 ## Features
 
@@ -11,17 +12,32 @@ It is a front end for [libimobiledevice](https://libimobiledevice.org/) and
 - Full backup to a folder you choose
 - Restore a backup, including onto a different device
 - Update to the latest signed iOS, keeping data
+- Erase & reinstall the latest signed iOS (you must type `ERASE` to confirm)
+- Update or erase a device that is stuck in recovery or DFU mode: leave no device selected
+- Progress bar instead of a flood of redrawn progress lines
+- Plain-English hints for common idevicerestore and idevicebackup2 errors
+- A timestamped log file for every job in `~/.local/state/rottenapple/`, ready to attach to a bug report
 
 ## Install
 
-Run the installer. It detects Arch or Fedora (and derivatives), installs everything,
-starts `usbmuxd`, and checks each tool:
+Run the installer. It detects Arch or Fedora (and derivatives), installs the .NET SDK and
+the device tools, builds the app into `~/.local/share/rottenapple`, adds a `rottenapple`
+command and an app menu entry, starts `usbmuxd`, and checks each tool:
 
 ```bash
 ./install.sh
 ```
 
-Options: `--dry-run` shows what would run without changing anything, and `--verbose`
+If your distro has no `idevicerestore` package, the installer builds it from source,
+together with the libimobiledevice libraries it needs, into `~/.local`. System packages
+are not touched. To force that build, for example because your distro's version is too
+old for your device:
+
+```bash
+./install.sh --build-idevicerestore
+```
+
+Other options: `--dry-run` shows what would run without changing anything, and `--verbose`
 also prints debug lines on screen. Every run writes a full timestamped log to
 `~/.local/state/rottenapple/install-<date>-<time>.log`.
 
@@ -30,25 +46,33 @@ To install by hand instead:
 Arch:
 
 ```bash
-sudo pacman -S usbmuxd libimobiledevice idevicerestore python tk
+sudo pacman -S usbmuxd libimobiledevice idevicerestore dotnet-sdk
 ```
 
 Fedora:
 
 ```bash
-sudo dnf install usbmuxd libimobiledevice-utils idevicerestore python3-tkinter
+sudo dnf install usbmuxd libimobiledevice-utils idevicerestore dotnet-sdk-10.0
 ```
 
 Then start the USB daemon:
 
 ```bash
-sudo systemctl enable --now usbmuxd
+sudo systemctl start usbmuxd
 ```
 
 ## Run
 
+After `./install.sh`, start **RottenApple** from your app menu, or:
+
 ```bash
-python3 rottenapple.py
+rottenapple
+```
+
+Without installing, from the repository:
+
+```bash
+dotnet run --project src/RottenApple
 ```
 
 Plug in the device, unlock it, click **Pair**, and tap **Trust** on the device.
@@ -57,10 +81,29 @@ Plug in the device, unlock it, click **Pair**, and tap **Trust** on the device.
 
 - Encrypted backups are not supported yet.
 - Turn off Find My before restoring a backup.
-- Update iOS needs an `idevicerestore` version that supports `-y`.
+- Update iOS and Erase need an `idevicerestore` version that supports `-y`.
+- RottenApple does not fix bugs inside idevicerestore itself. Restore failures on specific
+  devices (for example new iPhones or Apple silicon Macs) need fixes upstream.
 
 ## Tests
 
 ```bash
-python3 -m unittest test_rottenapple
+dotnet test
 ```
+
+## Project layout
+
+- `src/RottenApple/Core.cs`: device logic with no UI (tool lookup, device list, progress and error parsing)
+- `src/RottenApple/MainWindow.axaml(.cs)`: the window and the job runner
+- `src/RottenApple/Dialogs.cs`: confirm, info and text-input dialogs
+- `tests/RottenApple.Tests`: xUnit tests for `Core`
+- `install.sh`: installer for Arch and Fedora
+
+## AI usage disclosure
+
+This project was written with the help of an AI assistant: Claude (Anthropic), working
+through Claude Code. The GUI, the installer, the tests and this README were generated
+by AI from the maintainer's instructions. The code has been checked with unit tests and
+simulated installer runs, but has not yet been tested on real Arch or Fedora systems or
+with real devices. Read `install.sh` before you run it, since it uses `sudo`. Issues and
+pull requests are welcome.

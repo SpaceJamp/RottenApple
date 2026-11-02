@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # RottenApple installer: installs dependencies on Arch or Fedora and logs every step.
-# Usage: ./install.sh [--dry-run] [--verbose]
+# Usage: ./install.sh [--dry-run] [--verbose] [--build-idevicerestore]
 set -Eeuo pipefail
 
 DRY_RUN=0
 VERBOSE=0
+FORCE_BUILD=0
 for arg in "$@"; do
   case "$arg" in
     --dry-run) DRY_RUN=1 ;;
     --verbose) VERBOSE=1 ;;
+    --build-idevicerestore) FORCE_BUILD=1 ;;
     -h|--help) sed -n '2,3s/^# //p' "$0"; exit 0 ;;
     *) echo "Unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
@@ -20,6 +22,7 @@ mkdir -p "$LOG_DIR"
 : >"$LOG"
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"  # overridable so tests can fake a distro
 TOOLS=(idevice_id ideviceinfo idevicepair idevicebackup2 idevicerestore)
+APP_DIR="$HOME/.local/share/rottenapple"
 WARNINGS=0
 
 if [[ -t 2 ]]; then
@@ -82,11 +85,14 @@ detect_distro() {
     *" arch "*)
       PM=pacman
       INSTALL=(pacman -S --needed --noconfirm)
-      PACKAGES=(usbmuxd libimobiledevice python tk) ;;
+      PACKAGES=(usbmuxd libimobiledevice dotnet-sdk)
+      BUILD_DEPS=(base-devel git autoconf automake libtool pkgconf libzip curl openssl libusb readline zlib) ;;
     *" fedora "*)
       PM=dnf
       INSTALL=(dnf install -y)
-      PACKAGES=(usbmuxd libimobiledevice-utils python3 python3-tkinter) ;;
+      PACKAGES=(usbmuxd libimobiledevice-utils dotnet-sdk-10.0)
+      BUILD_DEPS=(gcc make git autoconf automake libtool pkgconf-pkg-config libzip-devel libcurl-devel
+                  openssl-devel libusb1-devel readline-devel zlib-devel) ;;
     *)
       log ERROR "Unsupported distro '$id'. RottenApple supports Arch and Fedora (and their derivatives)."
       exit 1 ;;
@@ -121,14 +127,58 @@ install_packages() {
   fi
   log OK "Required packages installed."
 
-  # Not every repo ships idevicerestore, so a failure here is a warning, not fatal.
-  log INFO "Installing idevicerestore (needed for Update iOS)"
+  if ((FORCE_BUILD)); then
+    log INFO "--build-idevicerestore given, skipping the $PM package."
+    build_idevicerestore
+    return 0
+  fi
+  log INFO "Installing idevicerestore (needed for Update iOS and Erase)"
   if run "${SUDO[@]}" "${INSTALL[@]}" idevicerestore; then
     log OK "idevicerestore installed."
   else
-    log WARN "idevicerestore is not available from $PM. Update iOS will not work."
-    log WARN "Build it from https://github.com/libimobiledevice/idevicerestore"
+    log WARN "idevicerestore is not available from $PM. Building it from source instead."
+    build_idevicerestore
   fi
+}
+
+# Build idevicerestore and the libimobiledevice libraries it needs from git into ~/.local.
+# Distro packages are often older than idevicerestore requires (configure fails on libzip,
+# libtatsu, libimobiledevice >= 1.4.0), so the whole stack is built together. Libraries get
+# an rpath to ~/.local/lib, so system packages are left untouched and no sudo is needed.
+build_idevicerestore() {
+  local prefix="$HOME/.local" src="${XDG_CACHE_HOME:-$HOME/.cache}/rottenapple/src" repo dir
+  log INFO "Installing build tools: ${BUILD_DEPS[*]}"
+  if ! run "${SUDO[@]}" "${INSTALL[@]}" "${BUILD_DEPS[@]}"; then
+    log WARN "Build tools failed to install. Skipping the idevicerestore build; Update iOS will not work."
+    return 0
+  fi
+  export PKG_CONFIG_PATH="$prefix/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+  export LDFLAGS="-Wl,-rpath,$prefix/lib ${LDFLAGS:-}"
+  log DEBUG "PKG_CONFIG_PATH=$PKG_CONFIG_PATH LDFLAGS=$LDFLAGS"
+  ((DRY_RUN)) || mkdir -p "$src"
+  # Order matters: each repo depends on the ones before it.
+  for repo in libplist libimobiledevice-glue libusbmuxd libtatsu libimobiledevice libirecovery idevicerestore; do
+    dir="$src/$repo"
+    log INFO "Building $repo"
+    if [[ -d $dir/.git ]]; then
+      run git -C "$dir" pull --ff-only || { build_failed "$repo"; return 0; }
+    else
+      run git clone --depth 1 "https://github.com/libimobiledevice/$repo.git" "$dir" || { build_failed "$repo"; return 0; }
+    fi
+    log DEBUG "$repo at commit $(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+    run env -C "$dir" ./autogen.sh --prefix="$prefix" --libdir="$prefix/lib" --without-cython \
+      && run make -C "$dir" -j"$(nproc 2>/dev/null || echo 2)" \
+      && run make -C "$dir" install \
+      || { build_failed "$repo"; return 0; }
+    log OK "$repo built and installed to $prefix"
+  done
+  log OK "idevicerestore built: $prefix/bin/idevicerestore"
+  [[ :$PATH: == *":$prefix/bin:"* ]] || log WARN "$prefix/bin is not on your PATH. The app still finds idevicerestore there."
+}
+
+build_failed() {
+  log WARN "Building $1 failed. Update iOS and Erase will not work. The log above shows the compiler output."
+  log WARN "Report it with this log file at https://github.com/libimobiledevice/$1/issues"
 }
 
 start_usbmuxd() {
@@ -144,18 +194,43 @@ verify() {
   log INFO "Checking installed tools"
   local tool path
   for tool in "${TOOLS[@]}"; do
-    if path=$(command -v "$tool"); then
-      log OK "$tool: $path ($("$tool" --version 2>&1 | head -n1 || true))"
+    if path=$(command -v "$tool" || command -v "$HOME/.local/bin/$tool"); then
+      log OK "$tool: $path ($("$path" --version 2>&1 | head -n1 || true))"
     else
       log WARN "$tool: not found on PATH"
     fi
   done
-  local tk
-  if tk=$(python3 -c 'import tkinter; print(tkinter.TkVersion)' 2>&1); then
-    log OK "python3 tkinter: Tk $tk"
+  if command -v dotnet >/dev/null; then
+    log OK "dotnet: $(dotnet --version 2>&1 | head -n1)"
   else
-    log WARN "python3 tkinter import failed: ${tk##*$'\n'}"
+    log WARN "dotnet: not found on PATH"
   fi
+  if [[ -x $APP_DIR/RottenApple ]]; then
+    log OK "RottenApple: $APP_DIR/RottenApple"
+  else
+    log WARN "RottenApple: not built"
+  fi
+}
+
+# Publish the Avalonia app to ~/.local/share/rottenapple and add a launcher and menu entry.
+build_app() {
+  local root launcher="$HOME/.local/bin/rottenapple" desktop="$HOME/.local/share/applications/rottenapple.desktop"
+  root=$(cd "$(dirname "$0")" && pwd)
+  export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
+  log INFO "Building RottenApple (Avalonia, .NET) into $APP_DIR"
+  if ! run dotnet publish "$root/src/RottenApple/RottenApple.csproj" -c Release -o "$APP_DIR"; then
+    log ERROR "Building RottenApple failed. The dotnet output is in $LOG"
+    exit 1
+  fi
+  log OK "RottenApple built."
+  ((DRY_RUN)) && { log INFO "(dry run, launcher and menu entry not written)"; return 0; }
+  mkdir -p "${launcher%/*}" "${desktop%/*}"
+  printf '#!/bin/sh\nexec "%s/RottenApple" "$@"\n' "$APP_DIR" >"$launcher"
+  chmod +x "$launcher"
+  printf '[Desktop Entry]\nType=Application\nName=RottenApple\nComment=Back up, restore and update iPhones and iPads\nExec=%s\nTerminal=false\nCategories=Utility;\n' \
+    "$launcher" >"$desktop"
+  log OK "Launcher: $launcher"
+  log OK "Menu entry: $desktop"
 }
 
 main() {
@@ -163,6 +238,7 @@ main() {
   detect_distro
   setup_sudo
   install_packages
+  build_app
   start_usbmuxd
   verify
   if ((WARNINGS)); then
@@ -170,7 +246,7 @@ main() {
   else
     log OK "Finished in ${SECONDS}s with no warnings."
   fi
-  log INFO "Start the app: python3 $(cd "$(dirname "$0")" && pwd)/rottenapple.py"
+  log INFO "Start the app: rottenapple (or from your app menu)"
 }
 
 main "$@"
