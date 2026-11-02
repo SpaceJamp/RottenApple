@@ -5,6 +5,14 @@ It is a front end for [libimobiledevice](https://libimobiledevice.org/) and
 [idevicerestore](https://github.com/libimobiledevice/idevicerestore), built with
 [Avalonia](https://avaloniaui.net/) on .NET 10.
 
+RottenApple runs on **Wayland only**. X11 sessions are not supported, and the app exits
+with a message if it cannot find a Wayland session. Your compositor needs `xdg_wm_base`
+version 3 or later, which GNOME, KDE Plasma and wlroots-based compositors such as Sway
+and Hyprland all provide.
+
+The icon is a parody: a rotten, wormy take on a famous bitten apple. RottenApple is not
+affiliated with or endorsed by Apple Inc.
+
 ## Features
 
 - List connected devices (name, iOS version, UDID)
@@ -96,6 +104,8 @@ dotnet test
 - `src/RottenApple/Core.cs`: device logic with no UI (tool lookup, device list, progress and error parsing)
 - `src/RottenApple/MainWindow.axaml(.cs)`: the window and the job runner
 - `src/RottenApple/Dialogs.cs`: confirm, info and text-input dialogs
+- `src/RottenApple/Assets/rottenapple.svg`: the icon (the PNG is rendered from it with
+  `rsvg-convert -w 256 -h 256 rottenapple.svg -o rottenapple.png`)
 - `tests/RottenApple.Tests`: xUnit tests for `Core`
 - `install.sh`: installer for Arch and Fedora
 

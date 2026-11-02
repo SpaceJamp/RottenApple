@@ -205,6 +205,11 @@ verify() {
   else
     log WARN "dotnet: not found on PATH"
   fi
+  if [[ ${XDG_SESSION_TYPE:-} == wayland || -n ${WAYLAND_DISPLAY:-} ]]; then
+    log OK "Session: Wayland"
+  else
+    log WARN "Session: ${XDG_SESSION_TYPE:-unknown}. RottenApple only runs in a Wayland session, not X11."
+  fi
   if [[ -x $APP_DIR/RottenApple ]]; then
     log OK "RottenApple: $APP_DIR/RottenApple"
   else
@@ -215,6 +220,7 @@ verify() {
 # Publish the Avalonia app to ~/.local/share/rottenapple and add a launcher and menu entry.
 build_app() {
   local root launcher="$HOME/.local/bin/rottenapple" desktop="$HOME/.local/share/applications/rottenapple.desktop"
+  local icon="$HOME/.local/share/icons/hicolor/scalable/apps/rottenapple.svg"
   root=$(cd "$(dirname "$0")" && pwd)
   export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
   log INFO "Building RottenApple (Avalonia, .NET) into $APP_DIR"
@@ -224,12 +230,15 @@ build_app() {
   fi
   log OK "RottenApple built."
   ((DRY_RUN)) && { log INFO "(dry run, launcher and menu entry not written)"; return 0; }
-  mkdir -p "${launcher%/*}" "${desktop%/*}"
+  mkdir -p "${launcher%/*}" "${desktop%/*}" "${icon%/*}"
   printf '#!/bin/sh\nexec "%s/RottenApple" "$@"\n' "$APP_DIR" >"$launcher"
   chmod +x "$launcher"
-  printf '[Desktop Entry]\nType=Application\nName=RottenApple\nComment=Back up, restore and update iPhones and iPads\nExec=%s\nTerminal=false\nCategories=Utility;\n' \
+  cp "$root/src/RottenApple/Assets/rottenapple.svg" "$icon"
+  # StartupWMClass lets the compositor match the window to this entry and its icon.
+  printf '[Desktop Entry]\nType=Application\nName=RottenApple\nComment=Back up, restore and update iPhones and iPads\nExec=%s\nIcon=rottenapple\nStartupWMClass=RottenApple\nTerminal=false\nCategories=Utility;\n' \
     "$launcher" >"$desktop"
   log OK "Launcher: $launcher"
+  log OK "Icon: $icon"
   log OK "Menu entry: $desktop"
 }
 
