@@ -14,6 +14,19 @@ It is a front end for [libimobiledevice](https://libimobiledevice.org/) and
 
 ## Install
 
+Run the installer. It detects Arch or Fedora (and derivatives), installs everything,
+starts `usbmuxd`, and checks each tool:
+
+```bash
+./install.sh
+```
+
+Options: `--dry-run` shows what would run without changing anything, and `--verbose`
+also prints debug lines on screen. Every run writes a full timestamped log to
+`~/.local/state/rottenapple/install-<date>-<time>.log`.
+
+To install by hand instead:
+
 Arch:
 
 ```bash
