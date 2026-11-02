@@ -96,6 +96,21 @@ Plug in the device, unlock it, click **Pair**, and tap **Trust** on the device.
 - RottenApple does not fix bugs inside idevicerestore itself. Restore failures on specific
   devices (for example new iPhones or Apple silicon Macs) need fixes upstream.
 
+## Security
+
+- Backup passwords reach `idevicebackup2` only through environment variables, never as
+  command-line arguments (visible to all users in `ps`) and never in logs.
+- Logs in `~/.local/state/rottenapple/` are readable only by you, and a new file is
+  created for every run, so an existing file or planted symlink is never overwritten.
+- Tools are only looked up in absolute `PATH` directories, so a file named like a tool in
+  the current directory is never run.
+- Erase and Update always target one device by UDID or, in recovery/DFU mode, by ECID.
+  Every destructive dialog names the device, and Enter never confirms it.
+- `install.sh` refuses to run as root, and builds idevicerestore from pinned upstream
+  commits (see `PINNED` in the script). It never builds the latest unreviewed upstream
+  code. The source-built tools in `~/.local` load libraries from `~/.local/lib`: do not
+  run them with `sudo`.
+
 ## Tests
 
 ```bash

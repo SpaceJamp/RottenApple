@@ -16,12 +16,27 @@ for arg in "$@"; do
   esac
 done
 
-LOG_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/rottenapple"
-LOG="$LOG_DIR/install-$(date +%Y%m%d-%H%M%S).log"
-mkdir -p "$LOG_DIR"
-: >"$LOG"
+SCRIPT_DIR=$(cd "$(dirname "$(readlink -f "$0")")" && pwd)  # real location, even when run via a symlink
+STATE_HOME=${XDG_STATE_HOME:-}
+[[ $STATE_HOME == /* ]] || STATE_HOME="$HOME/.local/state"  # XDG spec: ignore relative values
+LOG_DIR="$STATE_HOME/rottenapple"
+LOG="$LOG_DIR/install-$(date +%Y%m%d-%H%M%S)-$$.log"
+mkdir -p -m 700 "$LOG_DIR"
+# logs hold usernames, paths and device output: private to this user, and never follow a planted symlink
+(umask 077 && set -o noclobber && : >"$LOG") || { echo "Cannot create log file $LOG" >&2; exit 1; }
 OS_RELEASE="${OS_RELEASE:-/etc/os-release}"  # overridable so tests can fake a distro
 TOOLS=(idevice_id ideviceinfo idevicepair idevicebackup2 idevicerestore)
+# Upstream commits for the source build (--build-idevicerestore). Bump them deliberately after
+# reviewing the changes: git ls-remote https://github.com/libimobiledevice/<repo>.git HEAD
+declare -A PINNED=(
+  [libplist]=fe3dc34dc3484006e12b403f7ceb06f0ad40b6f4
+  [libimobiledevice-glue]=10ddafa16458a012bcbd3e83a6ab36a032dc84d8
+  [libusbmuxd]=93eb168bf6b07472d17781328c21df0c60300524
+  [libtatsu]=e7d6ad13ef928aa609d0ccdfc586f7d6e8e049bf
+  [libimobiledevice]=fa0f79190142bc309307967c058f89c1b36eb6b8
+  [libirecovery]=dc2e4c2628284b1f0cd1cebdd09b1b6c0738a1db
+  [idevicerestore]=0313795a84ac15248bc109850b5e2ea660609a23
+)
 APP_DIR="$HOME/.local/share/rottenapple"
 WARNINGS=0
 
@@ -42,6 +57,11 @@ log() {
   [[ $level == WARN ]] && WARNINGS=$((WARNINGS + 1))
   [[ $level == DEBUG && $VERBOSE == 0 ]] && return 0
   printf '%s%s [%-5s] %s%s\n' "${COLOR[$level]:-}" "$ts" "$level" "$*" "$RESET" >&2
+}
+
+# Success message for a step that run() executed; in a dry run nothing happened, so say so.
+ok() {
+  if ((DRY_RUN)); then log INFO "(dry run) would be done: $*"; else log OK "$*"; fi
 }
 
 # Run a command, log each output line, its exit code and how long it took.
@@ -68,7 +88,7 @@ log_system_info() {
   log INFO "Log file: $LOG"
   log DEBUG "Kernel: $(uname -srm)"
   log DEBUG "User: $(id -un) (uid $(id -u)), shell bash $BASH_VERSION"
-  log DEBUG "Script: $(cd "$(dirname "$0")" && pwd)/$(basename "$0"), args: ${*:-none}"
+  log DEBUG "Script: $SCRIPT_DIR/$(basename "$0"), args: ${*:-none}"
   if [[ -r $OS_RELEASE ]]; then
     while IFS= read -r line; do log DEBUG "os-release: $line"; done <"$OS_RELEASE"
   fi
@@ -103,7 +123,9 @@ detect_distro() {
 setup_sudo() {
   SUDO=()
   if ((EUID == 0)); then
-    log WARN "Running as root. Run as your normal user instead; the script calls sudo itself."
+    # as root, fetched upstream code would build and install as root and leave root-owned files in $HOME
+    log ERROR "Do not run this as root. Run it as your normal user; it calls sudo itself when needed."
+    exit 1
   elif ((DRY_RUN)); then
     SUDO=(sudo)
   else
@@ -119,13 +141,17 @@ install_packages() {
     log ERROR "$PM not found on PATH."
     exit 1
   fi
+  # pacman -S against an old sync database can fetch outdated or missing packages; never run -Sy alone
+  if [[ $PM == pacman ]] && ! find /var/lib/pacman/sync -name '*.db' -mtime -7 2>/dev/null | grep -q .; then
+    log WARN "The pacman package database is over a week old. Run 'sudo pacman -Syu' first if installs fail."
+  fi
   log INFO "Installing required packages: ${PACKAGES[*]}"
   if ! run "${SUDO[@]}" "${INSTALL[@]}" "${PACKAGES[@]}"; then
     [[ $PM == pacman ]] && log ERROR "Package database may be stale. Run 'sudo pacman -Syu', then rerun this script."
     log ERROR "Required packages failed to install. Full log: $LOG"
     exit 1
   fi
-  log OK "Required packages installed."
+  ok "Required packages installed."
 
   if ((FORCE_BUILD)); then
     log INFO "--build-idevicerestore given, skipping the $PM package."
@@ -134,7 +160,7 @@ install_packages() {
   fi
   log INFO "Installing idevicerestore (needed for Update iOS and Erase)"
   if run "${SUDO[@]}" "${INSTALL[@]}" idevicerestore; then
-    log OK "idevicerestore installed."
+    ok "idevicerestore installed."
   else
     log WARN "idevicerestore is not available from $PM. Building it from source instead."
     build_idevicerestore
@@ -159,20 +185,29 @@ build_idevicerestore() {
   # Order matters: each repo depends on the ones before it.
   for repo in libplist libimobiledevice-glue libusbmuxd libtatsu libimobiledevice libirecovery idevicerestore; do
     dir="$src/$repo"
-    log INFO "Building $repo"
-    if [[ -d $dir/.git ]]; then
-      run git -C "$dir" pull --ff-only || { build_failed "$repo"; return 0; }
-    else
-      run git clone --depth 1 "https://github.com/libimobiledevice/$repo.git" "$dir" || { build_failed "$repo"; return 0; }
+    local sha=${PINNED[$repo]}
+    log INFO "Building $repo at pinned commit $sha"
+    # Fetch exactly the pinned commit, so a new or tampered upstream commit never runs here unreviewed.
+    if [[ ! -d $dir/.git ]]; then
+      run git init -q "$dir" && run git -C "$dir" remote add origin "https://github.com/libimobiledevice/$repo.git" \
+        || { build_failed "$repo"; return 0; }
     fi
-    log DEBUG "$repo at commit $(git -C "$dir" rev-parse --short HEAD 2>/dev/null || echo unknown)"
-    run env -C "$dir" ./autogen.sh --prefix="$prefix" --libdir="$prefix/lib" --without-cython \
+    run git -C "$dir" fetch -q --depth 1 origin "$sha" && run git -C "$dir" checkout -q --detach FETCH_HEAD \
+      || { build_failed "$repo"; return 0; }
+    if ! ((DRY_RUN)) && [[ $(git -C "$dir" rev-parse HEAD) != "$sha" ]]; then
+      log ERROR "$repo is not at the pinned commit $sha. Refusing to build it."
+      build_failed "$repo"
+      return 0
+    fi
+    # --without-udev: libirecovery would otherwise install rules into /usr/lib/udev, which needs root.
+    # Other repos ignore options they do not know, with a warning.
+    run env -C "$dir" ./autogen.sh --prefix="$prefix" --libdir="$prefix/lib" --without-cython --without-udev \
       && run make -C "$dir" -j"$(nproc 2>/dev/null || echo 2)" \
       && run make -C "$dir" install \
       || { build_failed "$repo"; return 0; }
-    log OK "$repo built and installed to $prefix"
+    ok "$repo built and installed to $prefix"
   done
-  log OK "idevicerestore built: $prefix/bin/idevicerestore"
+  ok "idevicerestore built: $prefix/bin/idevicerestore"
   [[ :$PATH: == *":$prefix/bin:"* ]] || log WARN "$prefix/bin is not on your PATH. The app still finds idevicerestore there."
 }
 
@@ -184,7 +219,7 @@ build_failed() {
 start_usbmuxd() {
   log INFO "Starting usbmuxd"
   if run "${SUDO[@]}" systemctl start usbmuxd; then
-    log OK "usbmuxd running."
+    ok "usbmuxd running."
   else
     log WARN "Could not start usbmuxd now. udev normally starts it when a device is plugged in."
   fi
@@ -201,7 +236,7 @@ verify() {
     fi
   done
   if command -v dotnet >/dev/null; then
-    log OK "dotnet: $(dotnet --version 2>&1 | head -n1)"
+    log OK "dotnet: $(dotnet --version 2>&1 | head -n1 || true)"
   else
     log WARN "dotnet: not found on PATH"
   fi
@@ -219,24 +254,35 @@ verify() {
 
 # Publish the Avalonia app to ~/.local/share/rottenapple and add a launcher and menu entry.
 build_app() {
-  local root launcher="$HOME/.local/bin/rottenapple" desktop="$HOME/.local/share/applications/rottenapple.desktop"
+  local launcher="$HOME/.local/bin/rottenapple" desktop="$HOME/.local/share/applications/rottenapple.desktop"
   local icon="$HOME/.local/share/icons/hicolor/scalable/apps/rottenapple.svg"
-  root=$(cd "$(dirname "$0")" && pwd)
+  # A newline or backslash cannot be written safely into the launcher or the .desktop Exec line.
+  if [[ $HOME == *[$'\n\\']* ]]; then
+    log ERROR "Your home directory path contains a newline or backslash; cannot write a safe launcher."
+    exit 1
+  fi
   export DOTNET_CLI_TELEMETRY_OPTOUT=1 DOTNET_NOLOGO=1
   log INFO "Building RottenApple (Avalonia, .NET) into $APP_DIR"
-  if ! run dotnet publish "$root/src/RottenApple/RottenApple.csproj" -c Release -o "$APP_DIR"; then
+  if ! run dotnet publish "$SCRIPT_DIR/src/RottenApple/RottenApple.csproj" -c Release -o "$APP_DIR"; then
     log ERROR "Building RottenApple failed. The dotnet output is in $LOG"
     exit 1
   fi
-  log OK "RottenApple built."
+  ok "RottenApple built."
   ((DRY_RUN)) && { log INFO "(dry run, launcher and menu entry not written)"; return 0; }
   mkdir -p "${launcher%/*}" "${desktop%/*}" "${icon%/*}"
-  printf '#!/bin/sh\nexec "%s/RottenApple" "$@"\n' "$APP_DIR" >"$launcher"
+  # %q quotes the path for bash, so spaces, quotes or $ in it cannot break or inject into the launcher
+  printf '#!/bin/bash\nexec %q "$@"\n' "$APP_DIR/RottenApple" >"$launcher"
   chmod +x "$launcher"
-  cp "$root/src/RottenApple/Assets/rottenapple.svg" "$icon"
+  cp "$SCRIPT_DIR/src/RottenApple/Assets/rottenapple.svg" "$icon"
+  # Desktop Entry Exec quoting: wrap in "", escape " ` $ with a backslash, double every % (field codes)
+  local exec=$launcher
+  exec=${exec//\"/\\\"}
+  exec=${exec//\`/\\\`}
+  exec=${exec//\$/\\\$}
+  exec=${exec//%/%%}
   # StartupWMClass lets the compositor match the window to this entry and its icon.
-  printf '[Desktop Entry]\nType=Application\nName=RottenApple\nComment=Back up, restore and update iPhones and iPads\nExec=%s\nIcon=rottenapple\nStartupWMClass=RottenApple\nTerminal=false\nCategories=Utility;\n' \
-    "$launcher" >"$desktop"
+  printf '[Desktop Entry]\nType=Application\nName=RottenApple\nComment=Back up, restore and update iPhones and iPads\nExec="%s"\nIcon=rottenapple\nStartupWMClass=RottenApple\nTerminal=false\nCategories=Utility;\n' \
+    "$exec" >"$desktop"
   log OK "Launcher: $launcher"
   log OK "Icon: $icon"
   log OK "Menu entry: $desktop"

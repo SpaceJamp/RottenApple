@@ -1,5 +1,8 @@
 using Avalonia;
 
+// Wayland-only Linux app: Unix file modes are used for private logs and executable checks.
+[assembly: System.Runtime.Versioning.SupportedOSPlatform("linux")]
+
 namespace RottenApple;
 
 static class Program
