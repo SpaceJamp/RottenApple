@@ -111,7 +111,6 @@ dotnet test
 
 ## AI usage disclosure
 
-[!IMPORTANT]
 **This project was written with the help of an AI assistant: Claude (Anthropic), working
 through Claude Code. The GUI, the installer, the tests and this README were generated
 by AI from the maintainer's instructions. The code has been checked with unit tests and
