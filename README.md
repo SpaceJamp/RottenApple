@@ -109,12 +109,12 @@ dotnet test
 - `tests/RottenApple.Tests`: xUnit tests for `Core`
 - `install.sh`: installer for Arch and Fedora
 
-[!IMPORTANT]
 ## AI usage disclosure
 
-This project was written with the help of an AI assistant: Claude (Anthropic), working
+[!IMPORTANT]
+**This project was written with the help of an AI assistant: Claude (Anthropic), working
 through Claude Code. The GUI, the installer, the tests and this README were generated
 by AI from the maintainer's instructions. The code has been checked with unit tests and
 simulated installer runs, but has not yet been tested on real Arch or Fedora systems or
 with real devices. Read `install.sh` before you run it, since it uses `sudo`. Issues and
-pull requests are welcome.
+pull requests are welcome.**
